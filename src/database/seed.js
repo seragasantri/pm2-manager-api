@@ -13,10 +13,7 @@ async function seeder() {
   console.log("Seeder database dimulai...");
 
   // Seed super admin user
-  const hashedPassword = await bcrypt.hash(
-    "M16~dvdy2hR|vB+G]Z1g-cjGK%$V':$=+eUWxT9%u}6r<z}Y)",
-    120,
-  );
+  const hashedPassword = await bcrypt.hash(`QT1sy~C94zy*hUE\3ajG`, 10);
   await connection.execute(
     `INSERT IGNORE INTO users (username, password, role) VALUES (?, ?, ?)`,
     ["superadmin", hashedPassword, "superadmin"],
