@@ -7,7 +7,7 @@ async function seeder() {
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_DATABASE || 'pm2_manager',
+    database: process.env.DB_NAME || 'pm2_manager',
   });
 
   console.log('Seeder database dimulai...');

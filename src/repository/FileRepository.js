@@ -21,20 +21,37 @@ class FileRepository {
     const { cwd } = await this.getAppCwd(appName);
     const targetPath = path.join(cwd, dir);
 
-    // Security: Prevent path traversal
     if (!targetPath.startsWith(cwd)) {
       throw new Error('Akses direktori ditolak');
     }
 
     const items = await fs.readdir(targetPath, { withFileTypes: true });
+
+    const files = await Promise.all(
+      items.map(async (item) => {
+        const itemPath = path.join(targetPath, item.name);
+        let size = 0;
+        if (!item.isDirectory()) {
+          try {
+            const stat = await fs.stat(itemPath);
+            size = stat.size;
+          } catch {
+            size = 0;
+          }
+        }
+        return {
+          name: item.name,
+          isDirectory: item.isDirectory(),
+          path: path.join(dir, item.name).replace(/\\/g, '/'),
+          size,
+        };
+      })
+    );
+
     return {
       cwd,
       dir,
-      files: items.map(item => ({
-        name: item.name,
-        isDirectory: item.isDirectory(),
-        path: path.join(dir, item.name).replace(/\\/g, '/'),
-      })).sort((a, b) => {
+      files: files.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
         return a.name.localeCompare(b.name);

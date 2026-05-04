@@ -1,20 +1,28 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const config = require('../config/app');
+const User = require('../model/User');
 const Token = require('../model/Token');
 
 class AuthService {
   static async loginAdmin(username, password) {
-    if (username !== config.superadmin.username) {
+    const user = await User.findByUsername(username);
+
+    if (!user) {
       throw new Error('Username tidak ditemukan');
     }
 
-    if (password !== config.superadmin.password) {
+    if (user.role !== 'superadmin') {
+      throw new Error('Akses ditolak');
+    }
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
       throw new Error('Password salah');
     }
 
     const token = jwt.sign(
-      { role: 'superadmin', type: 'admin' },
+      { role: 'superadmin', type: 'admin', userId: user.id },
       config.jwt.secret,
       { expiresIn: config.jwt.expiresIn }
     );

@@ -3,7 +3,7 @@ const config = require('./app');
 
 let pool = null;
 
-async function getPool() {
+function getPool() {
   if (!pool) {
     pool = mysql.createPool({
       host: config.db.host,
@@ -20,14 +20,13 @@ async function getPool() {
 }
 
 async function query(sql, params = []) {
-  const pool = await getPool();
-  const [results] = await pool.execute(sql, params);
+  const p = getPool();
+  const [results] = await p.execute(sql, params);
   return results;
 }
 
 async function transaction(callback) {
-  const pool = await getPool();
-  const connection = await pool.getConnection();
+  const connection = await getPool().getConnection();
   await connection.beginTransaction();
 
   try {
