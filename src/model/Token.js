@@ -56,7 +56,14 @@ class Token {
     const tokens = await db.query('SELECT * FROM tokens ORDER BY created_at DESC');
     return tokens.map(token => ({
       ...token,
-      allowed_apps: JSON.parse(token.allowed_apps || '[]'),
+      allowed_apps: (() => {
+        if (Array.isArray(token.allowed_apps)) return token.allowed_apps;
+        if (typeof token.allowed_apps === 'string') {
+          try { return JSON.parse(token.allowed_apps); }
+          catch { return [token.allowed_apps]; }
+        }
+        return [];
+      })(),
     }));
   }
 }

@@ -84,10 +84,13 @@ async function fresh(seed = false) {
     });
 
     // Super admin
-    const hashedPassword = await bcrypt.hash("superadmin123", 10);
+    const hashedPassword = await bcrypt.hash(
+      "M16~dvdy2hR|vB+G]Z1g-cjGK%$V':$=+eUWxT9%u}6r<z}Y)",
+      10,
+    );
     await conn2.execute(
       `INSERT IGNORE INTO users (username, password, role) VALUES (?, ?, ?)`,
-      ["superadmin", hashedPassword, "superadmin"]
+      ["superadmin", hashedPassword, "superadmin"],
     );
     console.log("[OK] Super admin user seeded");
 
@@ -99,7 +102,7 @@ async function fresh(seed = false) {
     for (const app of apps) {
       await conn2.execute(
         `INSERT IGNORE INTO apps (name, description) VALUES (?, ?)`,
-        [app.name, app.description]
+        [app.name, app.description],
       );
     }
     console.log("[OK] Sample apps seeded");
@@ -107,7 +110,9 @@ async function fresh(seed = false) {
     await conn2.end();
   }
 
-  console.log(seed ? "\nMigrate:fresh --seed selesai!" : "\nMigrate:fresh selesai!");
+  console.log(
+    seed ? "\nMigrate:fresh --seed selesai!" : "\nMigrate:fresh selesai!",
+  );
 }
 
 const shouldSeed = process.argv.includes("--seed");
