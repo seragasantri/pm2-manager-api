@@ -1,44 +1,49 @@
-const mysql = require('mysql2/promise');
-const bcrypt = require('bcryptjs');
-require('dotenv').config();
+const mysql = require("mysql2/promise");
+const bcrypt = require("bcryptjs");
+require("dotenv").config();
 
 async function seeder() {
   const connection = await mysql.createConnection({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'pm2_manager',
+    host: process.env.DB_HOST || "localhost",
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD || "",
+    database: process.env.DB_NAME || "pm2_manager",
   });
 
-  console.log('Seeder database dimulai...');
+  console.log("Seeder database dimulai...");
 
   // Seed super admin user
-  const hashedPassword = await bcrypt.hash('superadmin123', 10);
+  const hashedPassword = await bcrypt.hash(
+    "M16~dvdy2hR|vB+G]Z1g-cjGK%$V':$=+eUWxT9%u}6r<z}Y)",
+    120,
+  );
   await connection.execute(
     `INSERT IGNORE INTO users (username, password, role) VALUES (?, ?, ?)`,
-    ['superadmin', hashedPassword, 'superadmin']
+    ["superadmin", hashedPassword, "superadmin"],
   );
-  console.log('[OK] Super admin user sudah dibuat (username: superadmin, password: superadmin123)');
+  console.log(
+    "[OK] Super admin user sudah dibuat (username: superadmin, password: superadmin123)",
+  );
 
   // Seed sample apps
   const apps = [
-    { name: 'pm2-ui', description: 'PM2 Manager Frontend' },
-    { name: 'pm2-manager-api', description: 'PM2 Manager Backend API' },
+    { name: "pm2-ui", description: "PM2 Manager Frontend" },
+    { name: "pm2-manager-api", description: "PM2 Manager Backend API" },
   ];
 
   for (const app of apps) {
     await connection.execute(
       `INSERT IGNORE INTO apps (name, description) VALUES (?, ?)`,
-      [app.name, app.description]
+      [app.name, app.description],
     );
   }
-  console.log('[OK] Sample apps sudah dibuat');
+  console.log("[OK] Sample apps sudah dibuat");
 
   await connection.end();
-  console.log('Seeder selesai!');
+  console.log("Seeder selesai!");
 }
 
 seeder().catch((err) => {
-  console.error('Seeder gagal:', err.message);
+  console.error("Seeder gagal:", err.message);
   process.exit(1);
 });
