@@ -18,7 +18,7 @@ class FileController {
         return AppResponse.validationError(res, { appName: 'appName diperlukan' });
       }
 
-      if (!await this.checkAccess(appName, req.user)) {
+      if (!FileController.checkAccess(appName, req.user)) {
         return AppResponse.forbidden(res, 'Anda tidak memiliki akses ke aplikasi ini');
       }
 
@@ -37,7 +37,7 @@ class FileController {
         return AppResponse.validationError(res, { appName: 'appName diperlukan', filePath: 'filePath diperlukan' });
       }
 
-      if (!await this.checkAccess(appName, req.user)) {
+      if (!FileController.checkAccess(appName, req.user)) {
         return AppResponse.forbidden(res, 'Anda tidak memiliki akses ke aplikasi ini');
       }
 
@@ -56,7 +56,7 @@ class FileController {
         return AppResponse.validationError(res, { appName: 'appName diperlukan', filePath: 'filePath diperlukan' });
       }
 
-      if (!await this.checkAccess(appName, req.user)) {
+      if (!FileController.checkAccess(appName, req.user)) {
         return AppResponse.forbidden(res, 'Anda tidak memiliki akses ke aplikasi ini');
       }
 
@@ -75,7 +75,7 @@ class FileController {
         return AppResponse.validationError(res, { appName: 'appName diperlukan', filePath: 'filePath diperlukan' });
       }
 
-      if (!await this.checkAccess(appName, req.user)) {
+      if (!FileController.checkAccess(appName, req.user)) {
         return AppResponse.forbidden(res, 'Anda tidak memiliki akses ke aplikasi ini');
       }
 
@@ -94,7 +94,7 @@ class FileController {
         return AppResponse.validationError(res, { appName: 'appName diperlukan', dirPath: 'dirPath diperlukan' });
       }
 
-      if (!await this.checkAccess(appName, req.user)) {
+      if (!FileController.checkAccess(appName, req.user)) {
         return AppResponse.forbidden(res, 'Anda tidak memiliki akses ke aplikasi ini');
       }
 
