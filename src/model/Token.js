@@ -18,7 +18,7 @@ class Token {
 
     const result = await db.query(
       'INSERT INTO tokens (label, code, allowed_apps, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())',
-      [label, code, JSON.stringify(allowed_apps), created_by]
+      [label, code, JSON.stringify(allowed_apps), created_by ?? null]
     );
 
     return { id: result.insertId, code, label, allowed_apps };
