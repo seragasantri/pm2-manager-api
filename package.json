@@ -7,6 +7,8 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "migrate": "node src/database/migrate.js",
+    "migrate:drop": "node src/database/drop.js",
+    "migrate:fresh": "node src/database/fresh.js",
     "seed": "node src/database/seed.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

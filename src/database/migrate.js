@@ -1,15 +1,15 @@
-const mysql = require('mysql2/promise');
-require('dotenv').config();
+const mysql = require("mysql2/promise");
+require("dotenv").config();
 
 async function migrate() {
   const connection = await mysql.createConnection({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'pm2_manager',
+    host: process.env.DB_HOST || "localhost",
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD || "",
+    database: process.env.DB_NAME || "pm2_manager",
   });
 
-  console.log('Migrasi database dimulai...');
+  console.log("Migrasi database dimulai...");
 
   // Create users table
   await connection.execute(`
@@ -22,18 +22,21 @@ async function migrate() {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
-  console.log('[OK] Tabel users sudah dibuat');
+  console.log("[OK] Tabel users sudah dibuat");
 
   // Create apps table
   await connection.execute(`
     CREATE TABLE IF NOT EXISTS apps (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(100) NOT NULL UNIQUE,
+      cwd VARCHAR(255) DEFAULT '',
+      pm_id INT DEFAULT 0,
       description TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
-  console.log('[OK] Tabel apps sudah dibuat');
+  console.log("[OK] Tabel apps sudah dibuat");
 
   // Create tokens table
   await connection.execute(`
@@ -48,13 +51,13 @@ async function migrate() {
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     )
   `);
-  console.log('[OK] Tabel tokens sudah dibuat');
+  console.log("[OK] Tabel tokens sudah dibuat");
 
   await connection.end();
-  console.log('Migrasi selesai!');
+  console.log("Migrasi selesai!");
 }
 
 migrate().catch((err) => {
-  console.error('Migrasi gagal:', err.message);
+  console.error("Migrasi gagal:", err.message);
   process.exit(1);
 });
