@@ -1,32 +1,32 @@
 const Docker = require('dockerode');
-const pm2 = require('pm2');
+const { execFile } = require('child_process');
 const App = require('../model/App');
 
 // Connect ke Docker daemon via Unix socket
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 
+// Environment untuk PM2 CLI — connect ke daemon host
+const PM2_ENV = { ...process.env, PM2_HOME: '/root/.pm2' };
+
 class AppService {
   /**
-   * Connect ke PM2 daemon
+   * Execute PM2 CLI via execFile (aman dari command injection)
+   * @param {string[]} args - array argumen, misal ['jlist'] atau ['restart', 'myapp']
    */
-  static connectPM2() {
+  static execPM2(args) {
     return new Promise((resolve, reject) => {
-      pm2.connect((err) => {
-        if (err) reject(err);
-        else resolve();
+      execFile('pm2', args, { env: PM2_ENV }, (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr || error.message));
+        } else {
+          try {
+            resolve(JSON.parse(stdout));
+          } catch (e) {
+            resolve(stdout);
+          }
+        }
       });
     });
-  }
-
-  /**
-   * Disconnect dari PM2 daemon
-   */
-  static disconnectPM2() {
-    try {
-      pm2.disconnect();
-    } catch (e) {
-      // Ignore
-    }
   }
 
   /**
@@ -68,17 +68,11 @@ class AppService {
       console.error('Gagal ambil Docker containers:', err.message);
     }
 
-    // 2. Ambil PM2 processes
+    // 2. Ambil PM2 processes via CLI
     try {
-      await this.connectPM2();
-      const list = await new Promise((resolve, reject) => {
-        pm2.list((err, list) => {
-          if (err) reject(err);
-          else resolve(list);
-        });
-      });
+      const pm2List = await this.execPM2(['jlist']);
 
-      const pm2Apps = list.map(app => {
+      const pm2Apps = pm2List.map(app => {
         const name = app.name;
         // Skip jika sudah ada di Docker (hindari duplikasi)
         if (apps.find(a => a.name === name)) return null;
@@ -98,8 +92,6 @@ class AppService {
       apps.push(...pm2Apps);
     } catch (err) {
       console.error('Gagal ambil PM2 processes:', err.message);
-    } finally {
-      this.disconnectPM2();
     }
 
     // Sync apps ke database
@@ -152,17 +144,12 @@ class AppService {
       return { action, container: appName, type: 'docker' };
     }
 
-    // Jika tidak ada di Docker, coba PM2
-    await this.connectPM2();
+    // Jika tidak ada di Docker, coba PM2 via CLI
     try {
-      return await new Promise((resolve, reject) => {
-        pm2[action](appName, (err, result) => {
-          if (err) reject(err);
-          else resolve({ action, container: appName, type: 'pm2' });
-        });
-      });
-    } finally {
-      this.disconnectPM2();
+      await this.execPM2([action, appName]);
+      return { action, container: appName, type: 'pm2' };
+    } catch (err) {
+      throw new Error(`Gagal melakukan aksi '${action}' pada '${appName}': ${err.message}`);
     }
   }
 
