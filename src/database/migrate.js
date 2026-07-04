@@ -30,13 +30,21 @@ async function migrate() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(100) NOT NULL UNIQUE,
       cwd VARCHAR(255) DEFAULT '',
-      pm_id INT DEFAULT 0,
+      pm_id VARCHAR(64) DEFAULT '',
       description TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
   console.log("[OK] Tabel apps sudah dibuat");
+
+  // Alter pm_id column from INT to VARCHAR(64) if exists
+  try {
+    await connection.execute(`ALTER TABLE apps MODIFY COLUMN pm_id VARCHAR(64) DEFAULT ''`);
+    console.log("[OK] Kolom pm_id diubah ke VARCHAR(64)");
+  } catch (err) {
+    console.log("[SKIP] Kolom pm_id sudah VARCHAR atau tidak ada:", err.message);
+  }
 
   // Create tokens table
   await connection.execute(`
