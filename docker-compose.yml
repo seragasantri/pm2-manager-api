@@ -1,0 +1,16 @@
+services:
+  backend_panel:
+    build: .
+    container_name: panel_backend_container
+    
+    # Menempelkan jaringan kontainer langsung ke VPS 
+    # Membuat Express.js bisa membaca MySQL/PostgreSQL di localhost VPS secara langsung
+    network_mode: "host"
+    
+    # Otomatis menyala kembali jika VPS restart
+    restart: always
+    
+    # Membaca variabel environment backend (.env)
+    env_file:
+      - .env
+      
