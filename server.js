@@ -1,7 +1,6 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const pm2 = require("pm2");
 const routes = require("./src/routes");
 const AppResponse = require("./src/http/response/AppResponse");
 
@@ -44,20 +43,12 @@ app.use((err, req, res, next) => {
   return AppResponse.error(res, "Terjadi kesalahan server");
 });
 
-// Connect to PM2 then start server
-pm2.connect((err) => {
-  if (err) {
-    console.error("Gagal terhubung ke PM2:", err);
-    process.exit(2);
-  }
-
-  // Gunakan port dari .env, atau default ke 3003 (sesuai konfigurasi Nginx Anda)
-  const PORT = process.env.PORT || 3003;
-  app.listen(PORT, () => {
-    console.log(`Server berjalan di port ${PORT}`);
-    console.log(`Health check (Lokal): http://localhost:${PORT}/health`);
-    console.log(
-      `Health check (Public): https://sim-obe.radenfatah.ac.id/panelPm/backend/health`,
-    );
-  });
+// Start server langsung (tidak perlu PM2 connect lagi)
+const PORT = process.env.PORT || 3003;
+app.listen(PORT, () => {
+  console.log(`Server berjalan di port ${PORT}`);
+  console.log(`Health check (Lokal): http://localhost:${PORT}/health`);
+  console.log(
+    `Health check (Public): https://sim-obe.radenfatah.ac.id/panelPm/backend/health`,
+  );
 });

@@ -14,10 +14,7 @@ services:
     env_file:
       - .env
 
-    # Mount PM2 daemon socket dari host agar container bisa membaca daftar aplikasi PM2
-    # PM2_HOME di host (default: ~/.pm2) di-share ke container
-    environment:
-      - PM2_HOME=/root/.pm2
+    # Mount Docker socket agar backend bisa manage containers di host
     volumes:
-      - /root/.pm2:/root/.pm2:ro
+      - /var/run/docker.sock:/var/run/docker.sock
       
