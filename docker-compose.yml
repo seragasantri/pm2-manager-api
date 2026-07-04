@@ -14,7 +14,12 @@ services:
     env_file:
       - .env
 
-    # Mount Docker socket agar backend bisa manage containers di host
+    # PM2_HOME agar PM2 client di container connect ke daemon di host
+    environment:
+      - PM2_HOME=/root/.pm2
+
+    # Mount Docker socket + PM2 daemon dari host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.pm2:/root/.pm2
       

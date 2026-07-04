@@ -1,13 +1,13 @@
 const Docker = require('dockerode');
+const pm2 = require('pm2');
+const fs = require('fs-extra');
 const path = require('path');
-const tar = require('tar-stream');
-const { PassThrough } = require('stream');
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 
 class FileRepository {
   /**
-   * Helper: exec command di dalam container dan return output
+   * Helper: exec command di dalam Docker container dan return output
    */
   static async execInContainer(containerId, cmd) {
     const container = docker.getContainer(containerId);
@@ -24,7 +24,6 @@ class FileRepository {
       let stderr = '';
 
       stream.on('data', (chunk) => {
-        // Docker stream format: 8 byte header
         const type = chunk[0];
         const data = chunk.slice(8).toString('utf8');
         if (type === 1) stdout += data;
@@ -41,136 +40,224 @@ class FileRepository {
   }
 
   /**
-   * Ambil container ID dan working directory
+   * Deteksi apakah app adalah Docker container atau PM2 process
+   * Return: { type: 'docker'|'pm2', cwd, containerId? }
    */
-  static async getAppCwd(appName) {
-    const containers = await docker.listContainers({ all: true });
-    const container = containers.find(c => {
-      const name = (c.Names?.[0] || '').replace(/^\//, '');
-      return name === appName;
-    });
+  static async resolveApp(appName) {
+    // Cek Docker dulu
+    try {
+      const containers = await docker.listContainers({ all: true });
+      const container = containers.find(c => {
+        const name = (c.Names?.[0] || '').replace(/^\//, '');
+        return name === appName;
+      });
 
-    if (!container) {
-      throw new Error(`Container '${appName}' tidak ditemukan`);
+      if (container) {
+        const cont = docker.getContainer(container.Id);
+        const info = await cont.inspect();
+        const cwd = info.Config?.Labels?.['app.cwd'] || '/app';
+
+        return {
+          type: 'docker',
+          cwd,
+          containerId: container.Id,
+        };
+      }
+    } catch (err) {
+      // Docker tidak tersedia, lanjut ke PM2
     }
 
-    const cont = docker.getContainer(container.Id);
-    const info = await cont.inspect();
+    // Cek PM2
+    try {
+      await new Promise((resolve, reject) => {
+        pm2.connect((err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
 
-    // Cari label 'app.cwd' atau gunakan default /app
-    const cwd = info.Config?.Labels?.['app.cwd'] || '/app';
+      const desc = await new Promise((resolve, reject) => {
+        pm2.describe(appName, (err, desc) => {
+          if (err) reject(err);
+          else resolve(desc);
+        });
+      });
 
-    return {
-      cwd,
-      containerId: container.Id,
-    };
+      if (desc && desc.length > 0) {
+        return {
+          type: 'pm2',
+          cwd: desc[0].pm2_env.pm_cwd,
+          pm_id: desc[0].pm2_env.pm_id,
+        };
+      }
+    } catch (err) {
+      // PM2 tidak tersedia
+    } finally {
+      try { pm2.disconnect(); } catch (e) { /* ignore */ }
+    }
+
+    throw new Error(`Aplikasi '${appName}' tidak ditemukan di Docker maupun PM2`);
   }
 
   /**
-   * List files di dalam container
+   * List files - support Docker & PM2
    */
   static async listFiles(appName, dir = '') {
-    const { cwd, containerId } = await this.getAppCwd(appName);
-    const targetPath = path.join(cwd, dir);
+    const app = await this.resolveApp(appName);
+    const targetPath = path.join(app.cwd, dir);
 
-    if (!targetPath.startsWith(cwd)) {
+    if (!targetPath.startsWith(app.cwd)) {
       throw new Error('Akses direktori ditolak');
     }
 
-    // Gunakan ls untuk list files
-    const output = await this.execInContainer(
-      containerId,
-      `ls -la "${targetPath}" 2>&1`
-    );
+    if (app.type === 'docker') {
+      // Docker: exec ls di container
+      const output = await this.execInContainer(
+        app.containerId,
+        `ls -la "${targetPath}" 2>&1`
+      );
 
-    // Parse ls output
-    const lines = output.trim().split('\n').filter(l => l && !l.startsWith('total'));
-    const files = lines.map(line => {
-      const parts = line.split(/\s+/);
-      const permissions = parts[0];
-      const size = parseInt(parts[4]) || 0;
-      const name = parts.slice(8).join(' ');
+      const lines = output.trim().split('\n').filter(l => l && !l.startsWith('total'));
+      const files = lines.map(line => {
+        const parts = line.split(/\s+/);
+        const permissions = parts[0];
+        const size = parseInt(parts[4]) || 0;
+        const name = parts.slice(8).join(' ');
 
-      if (!name || name === '.' || name === '..') return null;
+        if (!name || name === '.' || name === '..') return null;
+
+        return {
+          name,
+          isDirectory: permissions.startsWith('d'),
+          path: path.join(dir, name).replace(/\\/g, '/'),
+          size,
+        };
+      }).filter(Boolean);
 
       return {
-        name,
-        isDirectory: permissions.startsWith('d'),
-        path: path.join(dir, name).replace(/\\/g, '/'),
-        size,
+        cwd: app.cwd,
+        dir,
+        files: files.sort((a, b) => {
+          if (a.isDirectory && !b.isDirectory) return -1;
+          if (!a.isDirectory && b.isDirectory) return 1;
+          return a.name.localeCompare(b.name);
+        }),
       };
-    }).filter(Boolean);
+    } else {
+      // PM2: akses filesystem langsung di host
+      const items = await fs.readdir(targetPath, { withFileTypes: true });
 
-    return {
-      cwd,
-      dir,
-      files: files.sort((a, b) => {
-        if (a.isDirectory && !b.isDirectory) return -1;
-        if (!a.isDirectory && b.isDirectory) return 1;
-        return a.name.localeCompare(b.name);
-      }),
-    };
+      const files = await Promise.all(
+        items.map(async (item) => {
+          const itemPath = path.join(targetPath, item.name);
+          let size = 0;
+          if (!item.isDirectory()) {
+            try {
+              const stat = await fs.stat(itemPath);
+              size = stat.size;
+            } catch {
+              size = 0;
+            }
+          }
+          return {
+            name: item.name,
+            isDirectory: item.isDirectory(),
+            path: path.join(dir, item.name).replace(/\\/g, '/'),
+            size,
+          };
+        })
+      );
+
+      return {
+        cwd: app.cwd,
+        dir,
+        files: files.sort((a, b) => {
+          if (a.isDirectory && !b.isDirectory) return -1;
+          if (!a.isDirectory && b.isDirectory) return 1;
+          return a.name.localeCompare(b.name);
+        }),
+      };
+    }
   }
 
   /**
-   * Baca file dari container
+   * Baca file - support Docker & PM2
    */
   static async readFile(appName, filePath) {
-    const { cwd, containerId } = await this.getAppCwd(appName);
-    const targetPath = path.join(cwd, filePath);
+    const app = await this.resolveApp(appName);
+    const targetPath = path.join(app.cwd, filePath);
 
-    if (!targetPath.startsWith(cwd)) {
+    if (!targetPath.startsWith(app.cwd)) {
       throw new Error('Path tidak valid');
     }
 
-    const content = await this.execInContainer(containerId, `cat "${targetPath}"`);
-    return { content };
+    if (app.type === 'docker') {
+      const content = await this.execInContainer(app.containerId, `cat "${targetPath}"`);
+      return { content };
+    } else {
+      const content = await fs.readFile(targetPath, 'utf8');
+      return { content };
+    }
   }
 
   /**
-   * Tulis file ke container
+   * Tulis file - support Docker & PM2
    */
   static async writeFile(appName, filePath, content) {
-    const { cwd, containerId } = await this.getAppCwd(appName);
-    const targetPath = path.join(cwd, filePath);
+    const app = await this.resolveApp(appName);
+    const targetPath = path.join(app.cwd, filePath);
 
-    if (!targetPath.startsWith(cwd)) {
+    if (!targetPath.startsWith(app.cwd)) {
       throw new Error('Path tidak valid');
     }
 
-    // Escape content untuk shell
-    const escaped = content.replace(/'/g, "'\\''");
-    await this.execInContainer(containerId, `printf '%s' '${escaped}' > "${targetPath}"`);
+    if (app.type === 'docker') {
+      const escaped = content.replace(/'/g, "'\\''");
+      await this.execInContainer(app.containerId, `printf '%s' '${escaped}' > "${targetPath}"`);
+    } else {
+      await fs.writeFile(targetPath, content, 'utf8');
+    }
+
     return { message: 'File tersimpan' };
   }
 
   /**
-   * Hapus file dari container
+   * Hapus file - support Docker & PM2
    */
   static async deleteFile(appName, filePath) {
-    const { cwd, containerId } = await this.getAppCwd(appName);
-    const targetPath = path.join(cwd, filePath);
+    const app = await this.resolveApp(appName);
+    const targetPath = path.join(app.cwd, filePath);
 
-    if (!targetPath.startsWith(cwd)) {
+    if (!targetPath.startsWith(app.cwd)) {
       throw new Error('Path tidak valid');
     }
 
-    await this.execInContainer(containerId, `rm -rf "${targetPath}"`);
+    if (app.type === 'docker') {
+      await this.execInContainer(app.containerId, `rm -rf "${targetPath}"`);
+    } else {
+      await fs.remove(targetPath);
+    }
+
     return { message: 'Berhasil dihapus' };
   }
 
   /**
-   * Buat direktori di container
+   * Buat direktori - support Docker & PM2
    */
   static async createDir(appName, dirPath) {
-    const { cwd, containerId } = await this.getAppCwd(appName);
-    const targetPath = path.join(cwd, dirPath);
+    const app = await this.resolveApp(appName);
+    const targetPath = path.join(app.cwd, dirPath);
 
-    if (!targetPath.startsWith(cwd)) {
+    if (!targetPath.startsWith(app.cwd)) {
       throw new Error('Path tidak valid');
     }
 
-    await this.execInContainer(containerId, `mkdir -p "${targetPath}"`);
+    if (app.type === 'docker') {
+      await this.execInContainer(app.containerId, `mkdir -p "${targetPath}"`);
+    } else {
+      await fs.ensureDir(targetPath);
+    }
+
     return { message: 'Folder dibuat' };
   }
 }
