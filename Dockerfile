@@ -1,7 +1,6 @@
 # Build stage
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
-# CGO is required by the Docker SDK (sqlite dep), but we don't actually use sqlite.
 # Disable CGO for a smaller, statically-linked binary.
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 
