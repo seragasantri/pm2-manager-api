@@ -9,6 +9,11 @@ services:
       - .env
     environment:
       - PM2_HOME=/root/.pm2
+    # Map "host.docker.internal" to the Docker host gateway (works on Linux too).
+    # If your MySQL is on the same host, you can also use DB_HOST=172.17.0.1
+    # (the default bridge gateway) and skip this.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Mount Docker socket + PM2 daemon dir from host.
       - /var/run/docker.sock:/var/run/docker.sock

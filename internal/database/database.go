@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -17,6 +18,11 @@ type DB struct {
 }
 
 // Connect opens a MySQL connection pool.
+// Note: a failed Ping does NOT cause Connect to return an error. The pool is
+// still returned and the caller can decide to log a warning and continue
+// starting the HTTP server. Endpoints that hit the DB will surface the
+// connection error to the client; this avoids restart loops when MySQL is
+// briefly unavailable at boot time.
 func Connect(cfg *config.AppConfig) (*DB, error) {
 	db, err := sql.Open("mysql", cfg.DB.DSN())
 	if err != nil {
@@ -31,7 +37,7 @@ func Connect(cfg *config.AppConfig) (*DB, error) {
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("ping mysql: %w", err)
+		log.Printf("WARNING: initial MySQL ping failed: %v (server will still start)", err)
 	}
 
 	return &DB{db}, nil
