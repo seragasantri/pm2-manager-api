@@ -2,24 +2,16 @@ services:
   backend_panel:
     build: .
     container_name: panel_backend_container
-
-    # Menempelkan jaringan kontainer langsung ke VPS
-    # Membuat Express.js bisa membaca MySQL/PostgreSQL di localhost VPS secara langsung
+    # Host networking so the API can reach MySQL/PM2 daemon/Docker socket on the VPS.
     network_mode: "host"
-
-    # Otomatis menyala kembali jika VPS restart
     restart: always
-
-    # Membaca variabel environment backend (.env)
     env_file:
       - .env
-
-    # PM2_HOME agar PM2 client di container connect ke daemon di host
     environment:
       - PM2_HOME=/root/.pm2
-
-    # Mount Docker socket + PM2 daemon dari host
     volumes:
+      # Mount Docker socket + PM2 daemon dir from host.
       - /var/run/docker.sock:/var/run/docker.sock
       - /root/.pm2:/root/.pm2
-      
+      # Optionally mount a host path so file manager + terminal can see real apps.
+      # - /home/apps:/srv/apps:ro

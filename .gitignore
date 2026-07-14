@@ -1,18 +1,27 @@
 # Logs
 logs
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
+# Build artifacts
 dist
-dist-ssr
-*.local
+bin
+*.exe
+*.dll
+*.so
+*.dylib
 
-# Editor directories and files
+# Go
+# (allow go.mod, go.sum, *.go)
+/server
+/migrate
+/seed
+/vendor
+
+# Node (legacy — kept while transitioning)
+node_modules
+package-lock.json
+
+# Editor
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -23,6 +32,7 @@ dist-ssr
 *.sln
 *.sw?
 
-package-lock.json
-DEPLOY.md
+# Local config
 .env
+.env.local
+DEPLOY.md
