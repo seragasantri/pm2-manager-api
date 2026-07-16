@@ -20,6 +20,10 @@ type TerminalService struct {
 	pm2Cli    *pm2.Client
 }
 
+// Docker exposes the underlying docker client for sibling services that need
+// direct exec (e.g. GitService running `git pull` inside a container).
+func (s *TerminalService) Docker() *docker.Client { return s.dockerCli }
+
 func NewTerminalService(d *docker.Client, p *pm2.Client) *TerminalService {
 	return &TerminalService{dockerCli: d, pm2Cli: p}
 }
