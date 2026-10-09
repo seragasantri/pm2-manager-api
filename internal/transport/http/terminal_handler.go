@@ -296,6 +296,8 @@ func (h *TerminalHandler) runCommand(parent context.Context, ws *websocket.Conn,
 		_ = ws.WriteJSON(map[string]any{"type": "exit", "code": -1})
 		return
 	}
+	// Kirim posisi folder terbaru (sesi umum bisa pindah via "cd").
+	_ = ws.WriteJSON(map[string]any{"type": "cwd", "cwd": sess.CwdSaatIni()})
 	_ = ws.WriteJSON(map[string]any{"type": "exit", "code": out.code})
 }
 
