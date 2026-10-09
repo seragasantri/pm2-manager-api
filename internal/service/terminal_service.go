@@ -14,6 +14,8 @@ import (
 
 var ErrTerminalAppNotFound = errors.New("aplikasi tidak ditemukan untuk terminal")
 
+var ErrTerminalGeneralForbidden = errors.New("terminal umum hanya untuk superadmin")
+
 // TerminalService resolves apps to terminal sessions and runs commands.
 type TerminalService struct {
 	dockerCli *docker.Client
@@ -29,6 +31,7 @@ func NewTerminalService(d *docker.Client, p *pm2.Client) *TerminalService {
 }
 
 // Open resolves the app, applies access checks, and returns a Session.
+// Semua app (docker/PM2) → host shell di folder project.
 func (s *TerminalService) Open(ctx context.Context, appName string, claims *auth.Claims) (*Session, error) {
 	if claims != nil && claims.Role != "superadmin" {
 		ok := false
@@ -43,23 +46,19 @@ func (s *TerminalService) Open(ctx context.Context, appName string, claims *auth
 		}
 	}
 
-	// Prefer Docker; for container apps the root is the container's CWD label.
+	// 1. Docker → cari host project root (compose dir / bind mount)
 	if s.dockerCli != nil {
-		ctr, err := s.dockerCli.Get(ctx, appName)
-		if err == nil && ctr != nil {
-			cwd, err := s.dockerCli.CWD(ctx, ctr.ID)
-			if err != nil {
-				return nil, fmt.Errorf("inspect container: %w", err)
-			}
+		hostRoot, err := s.resolveDockerHostRoot(ctx, appName)
+		if err == nil && hostRoot != "" {
 			return &Session{
-				App:    appName,
-				Root:   cwd,
-				Kind:   "docker",
-				ContID: ctr.ID,
+				App:  appName,
+				Root: hostRoot,
+				Kind: "host",
 			}, nil
 		}
 	}
 
+	// 2. PM2 → host shell di pm_cwd
 	if s.pm2Cli != nil {
 		procs, err := s.pm2Cli.Describe(ctx, appName)
 		if err == nil && len(procs) > 0 {
@@ -74,7 +73,7 @@ func (s *TerminalService) Open(ctx context.Context, appName string, claims *auth
 			return &Session{
 				App:  appName,
 				Root: resolved,
-				Kind: "pm2",
+				Kind: "host",
 			}, nil
 		}
 	}
@@ -82,15 +81,87 @@ func (s *TerminalService) Open(ctx context.Context, appName string, claims *auth
 	return nil, ErrTerminalAppNotFound
 }
 
-// Exec runs a command in the given session, streaming output to w.
-// Returns the exit code; for Docker this is the container exit code.
-func (s *TerminalService) Exec(ctx context.Context, sess *Session, raw string, w io.Writer) (int, error) {
-	if sess.Kind == "docker" {
-		if err := sess.validateCmd(raw); err != nil {
-			return -1, err
-		}
-		wrapped := fmt.Sprintf("cd %q && %s", sess.Root, raw)
-		return s.dockerCli.ExecStream(ctx, sess.ContID, wrapped, w)
+// resolveDockerHostRoot mencari host directory dari container.
+// Prioritas: compose working_dir → bind mount → fallback CWD di host.
+func (s *TerminalService) resolveDockerHostRoot(ctx context.Context, appName string) (string, error) {
+	ctr, err := s.dockerCli.Get(ctx, appName)
+	if err != nil || ctr == nil {
+		return "", fmt.Errorf("container tidak ditemukan: %w", err)
 	}
+
+	// 1. Compose working_dir
+	ci, err := s.dockerCli.ComposeInfo(ctx, ctr.ID)
+	if err == nil && ci != nil && ci.WorkingDir != "" && dirExists(ci.WorkingDir) {
+		return ci.WorkingDir, nil
+	}
+
+	// 2. Bind mount → cari yang ada .git atau docker-compose.yml
+	binds, err := s.dockerCli.HostBinds(ctx, ctr.ID)
+	if err == nil {
+		for _, b := range binds {
+			if isGitRepo(b) || hasComposeFile(b) {
+				return b, nil
+			}
+			parent := filepath.Dir(b)
+			if isGitRepo(parent) || hasComposeFile(parent) {
+				return parent, nil
+			}
+		}
+		// 3. Bind mount pertama yang exist
+		for _, b := range binds {
+			if dirExists(b) {
+				return b, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("tidak bisa resolve host root untuk %s", appName)
+}
+
+// OpenGeneral membuka sesi terminal UMUM: akses penuh ke server (root /),
+// tanpa filter keamanan ketat — setara SSH. Hanya untuk superadmin.
+// appName boleh "*" atau nama app tertentu (dipakai sebagai label + CWD awal).
+func (s *TerminalService) OpenGeneral(appName string, claims *auth.Claims) (*Session, error) {
+	if claims == nil || claims.Role != "superadmin" {
+		return nil, ErrTerminalGeneralForbidden
+	}
+
+	root := "/"
+	label := appName
+	if label == "" || label == "*" {
+		label = "*"
+	} else {
+		// Kalau nama app dikenali, jadikan foldernya sebagai CWD awal
+		// (user tetap bebas cd ke mana saja setelahnya).
+		ctx := context.TODO()
+		if s.dockerCli != nil {
+			if hostRoot, err := s.resolveDockerHostRoot(ctx, label); err == nil && hostRoot != "" {
+				root = hostRoot
+			}
+		}
+		if root == "/" && s.pm2Cli != nil {
+			if procs, err := s.pm2Cli.Describe(ctx, label); err == nil && len(procs) > 0 {
+				if cwd := procs[0].Pm2Env.PmCwd; cwd != "" {
+					if resolved, ferr := filepath.EvalSymlinks(cwd); ferr == nil {
+						root = resolved
+					} else {
+						root = cwd
+					}
+				}
+			}
+		}
+	}
+
+	return &Session{
+		App:     label,
+		Root:    root,
+		Kind:    "host",
+		General: true,
+	}, nil
+}
+
+// Exec runs a command in the given session, streaming output to w.
+// Semua session → host shell.
+func (s *TerminalService) Exec(ctx context.Context, sess *Session, raw string, w io.Writer) (int, error) {
 	return sess.ExecHost(ctx, raw, w)
 }

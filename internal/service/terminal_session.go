@@ -28,10 +28,11 @@ const maxCmdLen = 4096
 // Session is a pre-flight validated handle to a per-app terminal context.
 // All commands run with their CWD forced to the app's root path.
 type Session struct {
-	App     string // app name
+	App     string // app name ("*" = terminal umum, akses penuh server)
 	Root    string // absolute root path (host fs)
-	Kind    string // "pm2" | "docker"
+	Kind    string // "pm2" | "docker" | "host"
 	ContID  string // for docker
+	General bool   // true = terminal umum (tanpa filter keamanan ketat)
 }
 
 // validateCmd runs pre-flight checks on a command string:
@@ -77,6 +78,9 @@ func (s *Session) scanPaths(cmd string) error {
 // ExecHost runs a single command on the host with CWD forced to root.
 // Output is streamed to w. Returns exit code (or -1, err on infrastructure failure).
 func (s *Session) ExecHost(ctx context.Context, raw string, w io.Writer) (int, error) {
+	if s.General {
+		return s.execGeneral(ctx, raw, w)
+	}
 	if err := s.validateCmd(raw); err != nil {
 		return -1, err
 	}
@@ -85,6 +89,23 @@ func (s *Session) ExecHost(ctx context.Context, raw string, w io.Writer) (int, e
 	cmd.Env = append(os.Environ(), "PWD="+s.Root, "HOME="+s.Root)
 	cmd.Dir = s.Root
 	return streamCmd(ctx, cmd, w)
+}
+
+// execGeneral menjalankan perintah TANPA filter keamanan ketat (mode SSH).
+// Hanya untuk sesi terminal umum (superadmin). Batas yang tersisa: panjang
+// maksimal perintah, dan CWD awal = root sesi (user bebas cd ke mana saja).
+func (s *Session) execGeneral(ctx context.Context, raw string, w io.Writer) (int, error) {
+	cmd := strings.TrimSpace(raw)
+	if cmd == "" {
+		return -1, ErrTerminalEmptyCmd
+	}
+	if len(cmd) > maxCmdLen {
+		return -1, ErrTerminalTooLong
+	}
+	command := exec.CommandContext(ctx, "bash", "-c", cmd)
+	command.Env = append(os.Environ(), "PWD="+s.Root, "HOME="+s.Root)
+	command.Dir = s.Root
+	return streamCmd(ctx, command, w)
 }
 
 func streamCmd(ctx context.Context, cmd *exec.Cmd, w io.Writer) (int, error) {

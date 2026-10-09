@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -48,6 +49,8 @@ var upgrader = websocket.Upgrader{
 }
 
 // Handle is the WebSocket endpoint: GET /api/terminal?appName=foo&token=<jwt>
+// Falls back to the REST exec handler when the client can't perform a WebSocket upgrade
+// (common behind CDNs / reverse proxies that strip the Upgrade header).
 func (h *TerminalHandler) Handle(c echo.Context) error {
 	// Auth via ?token= since browsers can't set headers for WS easily.
 	tok := c.QueryParam("token")
@@ -71,6 +74,29 @@ func (h *TerminalHandler) Handle(c echo.Context) error {
 		return response.ValidationError(c, map[string]string{"appName": "appName diperlukan"})
 	}
 
+	// Mode terminal umum: appName "*" atau "general" → akses penuh server,
+	// hanya untuk superadmin (setara SSH).
+	if appName == "*" || appName == "general" {
+		sess, err := h.terms.OpenGeneral(appName, claims)
+		if err != nil {
+			if errors.Is(err, service.ErrTerminalGeneralForbidden) {
+				return response.Forbidden(c, err.Error())
+			}
+			return response.ServerError(c, err.Error())
+		}
+		// WebSocket path
+		up := strings.ToLower(c.Request().Header.Get("Upgrade"))
+		if strings.Contains(up, "websocket") {
+			return h.handleWS(c, sess)
+		}
+		// REST fallback
+		cmd := c.QueryParam("cmd")
+		if cmd != "" {
+			return h.handleRESTExec(c, sess, cmd)
+		}
+		return h.handleRESTConnect(c, sess)
+	}
+
 	sess, err := h.terms.Open(c.Request().Context(), appName, claims)
 	if err != nil {
 		if errors.Is(err, service.ErrTerminalNotAllowed) {
@@ -79,6 +105,92 @@ func (h *TerminalHandler) Handle(c echo.Context) error {
 		return response.ServerError(c, err.Error())
 	}
 
+	// WebSocket path
+	up := strings.ToLower(c.Request().Header.Get("Upgrade"))
+	if strings.Contains(up, "websocket") {
+		return h.handleWS(c, sess)
+	}
+
+	// REST fallback (SSE output + POST exec)
+	cmd := c.QueryParam("cmd")
+	if cmd != "" {
+		return h.handleRESTExec(c, sess, cmd)
+	}
+	return h.handleRESTConnect(c, sess)
+}
+
+func (h *TerminalHandler) handleRESTConnect(c echo.Context, sess *service.Session) error {
+	return response.OK(c, map[string]any{
+		"type": "ready",
+		"cwd":  sess.Root,
+		"root": sess.Root,
+		"app":  sess.App,
+		"kind": sess.Kind,
+	})
+}
+
+type restExecRequest struct {
+	Command string `json:"command"`
+}
+
+func (h *TerminalHandler) handleRESTExec(c echo.Context, sess *service.Session, cmd string) error {
+	if cmd == "" {
+		// Try JSON body
+		var req restExecRequest
+		if err := c.Bind(&req); err == nil {
+			cmd = req.Command
+		}
+	}
+	if cmd == "" {
+		return response.ValidationError(c, map[string]string{"command": "command diperlukan"})
+	}
+
+	ctx, cancel := context.WithCancel(c.Request().Context())
+	defer cancel()
+
+	c.Response().Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	c.Response().Header().Set("Cache-Control", "no-cache")
+	c.Response().Header().Set("Connection", "keep-alive")
+	c.Response().WriteHeader(http.StatusOK)
+
+	flusher, ok := c.Response().Writer.(http.Flusher)
+	if !ok {
+		return response.ServerError(c, "streaming tidak didukung")
+	}
+
+	fmt.Fprintf(c.Response().Writer, "data: %s\n\n", mustJSON(map[string]string{"type": "begin"}))
+	flusher.Flush()
+
+	code, err := h.terms.Exec(ctx, sess, cmd, &termSSEWriter{inner: c.Response().Writer, flusher: flusher})
+
+	if err != nil {
+		fmt.Fprintf(c.Response().Writer, "data: %s\n\n", mustJSON(map[string]any{"type": "error", "message": err.Error()}))
+	}
+	fmt.Fprintf(c.Response().Writer, "data: %s\n\n", mustJSON(map[string]any{"type": "exit", "code": code}))
+	flusher.Flush()
+	return nil
+}
+
+func mustJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// termSSEWriter wraps http.ResponseWriter and frames each Write as an SSE data: event.
+type termSSEWriter struct {
+	inner   http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (sw *termSSEWriter) Write(p []byte) (int, error) {
+	n, err := fmt.Fprintf(sw.inner, "data: %s\n\n", mustJSON(map[string]string{"type": "stdout", "data": string(p)}))
+	if err == nil && sw.flusher != nil {
+		sw.flusher.Flush()
+	}
+	return n, err
+}
+
+func (h *TerminalHandler) handleWS(c echo.Context, sess *service.Session) error {
 	ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
 		return err
