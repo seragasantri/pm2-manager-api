@@ -196,6 +196,22 @@ func (s *Session) CwdSaatIni() string {
 	return s.Cwd
 }
 
+// SetCwd menanam posisi awal sesi — dipakai mode REST yang stateless
+// (tiap request HTTP bikin sesi baru): frontend mengirim cwd terakhir
+// di tiap request. Hanya menerima direktori absolut yang benar-benar ada.
+func (s *Session) SetCwd(p string) {
+	p = filepath.Clean(strings.TrimSpace(p))
+	if p == "" || !filepath.IsAbs(p) {
+		return
+	}
+	if info, err := os.Stat(p); err != nil || !info.IsDir() {
+		return
+	}
+	s.mu.Lock()
+	s.Cwd = p
+	s.mu.Unlock()
+}
+
 func streamCmd(ctx context.Context, cmd *exec.Cmd, w io.Writer) (int, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

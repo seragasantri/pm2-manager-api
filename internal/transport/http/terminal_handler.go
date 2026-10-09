@@ -148,6 +148,12 @@ func (h *TerminalHandler) handleRESTExec(c echo.Context, sess *service.Session, 
 	ctx, cancel := context.WithCancel(c.Request().Context())
 	defer cancel()
 
+	// Mode umum + REST (stateless): tanam posisi terakhir dari frontend
+	// supaya "cd" menempel antar request.
+	if cwdParam := c.QueryParam("cwd"); cwdParam != "" {
+		sess.SetCwd(cwdParam)
+	}
+
 	c.Response().Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	c.Response().Header().Set("Cache-Control", "no-cache")
 	c.Response().Header().Set("Connection", "keep-alive")
@@ -166,6 +172,8 @@ func (h *TerminalHandler) handleRESTExec(c echo.Context, sess *service.Session, 
 	if err != nil {
 		fmt.Fprintf(c.Response().Writer, "data: %s\n\n", mustJSON(map[string]any{"type": "error", "message": err.Error()}))
 	}
+	// Sertakan posisi folder terbaru (sesi umum bisa pindah via "cd").
+	fmt.Fprintf(c.Response().Writer, "data: %s\n\n", mustJSON(map[string]any{"type": "cwd", "cwd": sess.CwdSaatIni()}))
 	fmt.Fprintf(c.Response().Writer, "data: %s\n\n", mustJSON(map[string]any{"type": "exit", "code": code}))
 	flusher.Flush()
 	return nil
