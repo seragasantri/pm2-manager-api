@@ -34,6 +34,11 @@ func (r *UserRepository) FindByID(ctx context.Context, id int64) (*model.User, e
 	return scanUser(row)
 }
 
+func (r *UserRepository) UpdatePassword(ctx context.Context, id int64, hashed string) error {
+	_, err := r.db.Exec(ctx, `UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?`, hashed, id)
+	return err
+}
+
 func scanUser(row *sql.Row) (*model.User, error) {
 	var u model.User
 	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.UpdatedAt)

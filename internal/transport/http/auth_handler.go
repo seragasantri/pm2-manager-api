@@ -35,14 +35,19 @@ func (h *AuthHandler) Login(c echo.Context) error {
 			}
 			return response.ServerError(c, err.Error())
 		}
+		auditRecord(c, "login", "auth", req.Username, map[string]string{"method": "admin"})
 		return response.OK(c, res, "Login berhasil")
 	}
 
 	if req.AccessCode != "" {
 		res, err := h.svc.LoginWithToken(c.Request().Context(), req.AccessCode)
 		if err != nil {
-			return response.Unauthorized(c, err.Error())
+			if errors.Is(err, service.ErrInvalidAccessCode) || errors.Is(err, service.ErrAccessDenied) {
+				return response.Unauthorized(c, err.Error())
+			}
+			return response.ServerError(c, err.Error())
 		}
+		auditRecord(c, "login", "auth", req.AccessCode[:min(8, len(req.AccessCode))], map[string]string{"method": "token"})
 		return response.OK(c, res, "Login berhasil")
 	}
 

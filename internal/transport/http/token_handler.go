@@ -24,8 +24,9 @@ func (h *TokenHandler) Index(c echo.Context) error {
 }
 
 type tokenBody struct {
-	Label       string   `json:"label"`
-	AllowedApps []string `json:"allowedApps"`
+	Label          string   `json:"label"`
+	AllowedApps    []string `json:"allowedApps"`
+	AllowedActions []string `json:"allowedActions"`
 }
 
 func (h *TokenHandler) Store(c echo.Context) error {
@@ -48,7 +49,7 @@ func (h *TokenHandler) Store(c echo.Context) error {
 	}
 
 	tok, err := h.svc.Create(c.Request().Context(), service.CreateTokenInput{
-		Label: body.Label, AllowedApps: body.AllowedApps,
+		Label: body.Label, AllowedApps: body.AllowedApps, AllowedActions: body.AllowedActions,
 	}, createdBy)
 	if err != nil {
 		return response.ServerError(c, err.Error())
@@ -67,7 +68,7 @@ func (h *TokenHandler) Update(c echo.Context) error {
 	}
 
 	tok, err := h.svc.Update(c.Request().Context(), id, service.CreateTokenInput{
-		Label: body.Label, AllowedApps: body.AllowedApps,
+		Label: body.Label, AllowedApps: body.AllowedApps, AllowedActions: body.AllowedActions,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrTokenNotFound) {

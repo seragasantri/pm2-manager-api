@@ -49,5 +49,6 @@ func (h *AppHandler) Action(c echo.Context) error {
 		}
 		return response.ServerError(c, err.Error())
 	}
+	auditRecord(c, "apps."+req.Action, "app", req.Name, map[string]string{"action": req.Action, "app": req.Name})
 	return response.OK(c, nil, "Aplikasi '"+req.Name+"' berhasil di-"+req.Action)
 }

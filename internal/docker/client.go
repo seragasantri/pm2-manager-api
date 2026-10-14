@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,14 @@ type Container struct {
 	State   string
 	Created int64
 	Image   string
+}
+
+// ComposeInfo holds docker-compose project metadata from container labels.
+type ComposeInfo struct {
+	Project     string
+	Service     string
+	WorkingDir  string // host path of compose project
+	ConfigFiles string // colon/comma separated compose files
 }
 
 // List returns all containers (running and stopped).
@@ -85,6 +94,43 @@ func (c *Client) CWD(ctx context.Context, id string) (string, error) {
 		return info.Config.WorkingDir, nil
 	}
 	return "/app", nil
+}
+
+// ComposeInfo returns docker-compose project labels if the container was started by Compose.
+func (c *Client) ComposeInfo(ctx context.Context, id string) (*ComposeInfo, error) {
+	info, err := c.cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	labels := info.Config.Labels
+	if labels == nil {
+		return nil, nil
+	}
+	ci := &ComposeInfo{
+		Project:     labels["com.docker.compose.project"],
+		Service:     labels["com.docker.compose.service"],
+		WorkingDir:  labels["com.docker.compose.project.working_dir"],
+		ConfigFiles: labels["com.docker.compose.project.config_files"],
+	}
+	if ci.Project == "" && ci.WorkingDir == "" {
+		return nil, nil
+	}
+	return ci, nil
+}
+
+// HostBinds returns host source paths of bind mounts (for finding git roots).
+func (c *Client) HostBinds(ctx context.Context, id string) ([]string, error) {
+	info, err := c.cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, m := range info.Mounts {
+		if string(m.Type) == "bind" && m.Source != "" {
+			out = append(out, m.Source)
+		}
+	}
+	return out, nil
 }
 
 // Action runs start/stop/restart on the container.
@@ -204,4 +250,66 @@ func stripDockerStreamHeader(b []byte) string {
 		b = b[8+size:]
 	}
 	return out.String()
+}
+
+// Stats holds per-container CPU% + memory bytes (single snapshot, best-effort).
+type Stats struct {
+	CPU     float64 // percent 0..N*100
+	Memory  uint64  // bytes used
+	MemLim  uint64  // bytes limit
+}
+
+// Stats returns CPU% + memory for one running container; returns nil stats on error (no throw).
+func (c *Client) Stats(ctx context.Context, id string) (*Stats, error) {
+	stats, err := c.cli.ContainerStats(ctx, id, false)
+	if err != nil {
+		return nil, err
+	}
+	defer stats.Body.Close()
+	var resultHolder *Stats
+	importJSON := func() error {
+		var typed struct {
+			CPUStats    struct {
+				CPUUsage struct {
+					TotalUsage  uint64 `json:"total_usage"`
+					PercpuUsage []uint64 `json:"percpu_usage"`
+				} `json:"cpu_usage"`
+				SystemUsage uint64 `json:"system_cpu_usage"`
+				OnlineCPUs  uint32 `json:"online_cpus"`
+			} `json:"cpu_stats"`
+			PreCPUStats struct {
+				CPUUsage struct {
+					TotalUsage uint64 `json:"total_usage"`
+				} `json:"cpu_usage"`
+				SystemUsage uint64 `json:"system_cpu_usage"`
+			} `json:"precpu_stats"`
+			MemoryStats struct {
+				Usage uint64 `json:"usage"`
+				Limit uint64 `json:"limit"`
+			} `json:"memory_stats"`
+		}
+		if err := json.NewDecoder(stats.Body).Decode(&typed); err != nil {
+			return err
+		}
+		cpuDelta := float64(typed.CPUStats.CPUUsage.TotalUsage) - float64(typed.PreCPUStats.CPUUsage.TotalUsage)
+		sysDelta := float64(typed.CPUStats.SystemUsage) - float64(typed.PreCPUStats.SystemUsage)
+		cpus := float64(typed.CPUStats.OnlineCPUs)
+		if cpus == 0 {
+			cpus = float64(len(typed.CPUStats.CPUUsage.PercpuUsage))
+			if cpus == 0 {
+				cpus = 1
+			}
+		}
+		cpu := 0.0
+		if sysDelta > 0 && cpuDelta > 0 {
+			cpu = (cpuDelta / sysDelta) * cpus * 100
+		}
+		resultHolder = &Stats{CPU: cpu, Memory: typed.MemoryStats.Usage, MemLim: typed.MemoryStats.Limit}
+		return nil
+	}
+	if err := importJSON(); err != nil {
+		return nil, err
+	}
+	// SDK delta can be 0 for idle containers; keep memory at least (ponytail: 2-sample CPU needs second call)
+	return resultHolder, nil
 }

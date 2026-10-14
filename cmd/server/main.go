@@ -30,6 +30,10 @@ func main() {
 	if cfg.JWT.Secret == "" {
 		log.Fatal("JWT_SECRET harus di-set di .env")
 	}
+	// Secret contoh yang bocor ke publik = siapa pun bisa memalsukan token superadmin.
+	if cfg.JWT.Secret == "your-super-secret-jwt-key-change-in-production" {
+		log.Fatal("JWT_SECRET masih memakai nilai default contoh; ganti dengan: openssl rand -hex 64")
+	}
 
 	db, err := database.Connect(cfg)
 	if err != nil {
@@ -75,6 +79,9 @@ func main() {
 	auditSvc := service.NewAuditService(auditRepo)
 	aiConfigRepo := repository.NewAiConfigRepository(db)
 	aiSettingsSvc := service.NewAiSettingsService(aiConfigRepo)
+	ptyMgr := service.NewPtyManager()
+	wwwSvc := service.NewWWWService(cfg.WWW.Root, cfg.WWW.NginxDir)
+	sysSvc := service.NewSystemService()
 
 	// Ensure audit_logs table exists (best-effort, log warning on failure)
 	if err := auditRepo.EnsureTable(context.Background()); err != nil {
@@ -103,6 +110,9 @@ func main() {
 	uptimeH := httpx.NewUptimeHandler(uptimeSvc)
 	auditH := httpx.NewAuditHandler(auditSvc)
 	aiSettingsH := httpx.NewAiSettingsHandler(aiSettingsSvc)
+	ptyH := httpx.NewPtyHandler(jwtSvc, ptyMgr)
+	wwwH := httpx.NewWWWHandler(wwwSvc, jwtSvc, pm2Cli, dockerCli)
+	infraH := httpx.NewInfraHandler(dockerCli, pm2Cli, cfg.PM2.Bin, sysSvc)
 	httpx.SetAuditRecorder(auditSvc.Record)
 
 	e := echo.New()
@@ -119,11 +129,24 @@ func main() {
 	register := func(prefix string) {
 		g := e.Group(prefix)
 
+		// Health harus mencerminkan dependensi kritis (MySQL). Tanpa ini service
+		// bisa "hidup tapi lumpuh": proses up, tapi semua query gagal.
 		g.GET("/health", func(c echo.Context) error {
-			return c.JSON(http.StatusOK, map[string]any{
+			ctx, cancel := context.WithTimeout(c.Request().Context(), 3*time.Second)
+			defer cancel()
+
+			body := map[string]any{
 				"status":    "ok",
+				"database":  "ok",
 				"timestamp": time.Now().UTC().Format(time.RFC3339),
-			})
+			}
+			if err := db.PingContext(ctx); err != nil {
+				body["status"] = "degraded"
+				body["database"] = "unreachable"
+				log.Printf("health: MySQL ping failed: %v", err)
+				return c.JSON(http.StatusServiceUnavailable, body)
+			}
+			return c.JSON(http.StatusOK, body)
 		})
 
 		api := g.Group("/api")
@@ -193,6 +216,49 @@ func main() {
 		admin.POST("/ai/cek-koneksi", aiSettingsH.CekKoneksi)
 		admin.POST("/ai/playground", aiSettingsH.Playground)
 
+		// Terminal root (PTY interaktif, setara SSH) — superadmin.
+		admin.GET("/pty", ptyH.Index)
+		admin.POST("/pty", ptyH.Create)
+		admin.DELETE("/pty/:id", ptyH.Destroy)
+		admin.POST("/pty/:id/input", ptyH.Input)
+		admin.POST("/pty/:id/resize", ptyH.Resize)
+		admin.GET("/pty/:id/stream", ptyH.Stream)
+		admin.GET("/pty/:id/poll", ptyH.Poll)
+		admin.POST("/pty/:id/ticket", ptyH.Ticket)
+		api.GET("/pty/:id/ws", ptyH.WS) // auth via tiket 60 detik (browser tak bisa set header WS)
+
+		// Websites & File Manager /var/www — superadmin.
+		admin.GET("/www/sites", wwwH.Sites)
+		admin.GET("/www/list", wwwH.List)
+		admin.GET("/www/stat", wwwH.Stat)
+		admin.GET("/www/read", wwwH.Read)
+		admin.POST("/www/write", wwwH.Write)
+		admin.POST("/www/create", wwwH.Create)
+		admin.POST("/www/rename", wwwH.Rename)
+		admin.POST("/www/delete", wwwH.Delete)
+		admin.POST("/www/chmod", wwwH.Chmod)
+		admin.POST("/www/copy", wwwH.Copy)
+		admin.POST("/www/move", wwwH.Move)
+		admin.POST("/www/compress", wwwH.Compress)
+		admin.POST("/www/extract", wwwH.Extract)
+		admin.POST("/www/upload", wwwH.Upload)
+		admin.POST("/www/upload/abort", wwwH.AbortUpload)
+		admin.GET("/www/search", wwwH.Search)
+		admin.GET("/www/du", wwwH.DiskUsage)
+		admin.POST("/www/ticket", wwwH.Ticket)
+		api.GET("/www/download", wwwH.Download) // auth via tiket berumur pendek
+
+		// Docker & PM2 (manajemen lengkap) + info server — superadmin.
+		admin.GET("/docker/overview", infraH.DockerOverview)
+		admin.GET("/docker/containers/:id/logs", infraH.DockerLogs)
+		admin.GET("/docker/containers/:id/inspect", infraH.DockerInspect)
+		admin.POST("/docker/containers/:id/action", infraH.DockerAction)
+		admin.GET("/pm2/processes", infraH.Pm2List)
+		admin.GET("/pm2/processes/:name/logs", infraH.Pm2Logs)
+		admin.POST("/pm2/processes/:name/action", infraH.Pm2Action)
+		admin.POST("/pm2/save", infraH.Pm2Save)
+		admin.GET("/system/overview", infraH.SystemOverview)
+
 		api.GET("/terminal", termH.Handle)
 	}
 	register("")
@@ -217,7 +283,7 @@ func main() {
 		log.Printf("Server berjalan di port %s", cfg.Port)
 		log.Printf("Health (Lokal):    http://localhost:%s/health", cfg.Port)
 		log.Printf("Health (Public):   https://sim-obe.radenfatah.ac.id/panelPm/backend/health")
-		if err := e.Start(":" + cfg.Port); err != nil && err != http.ErrServerClosed {
+		if err := e.Start(cfg.BindAddr + ":" + cfg.Port); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server: %v", err)
 		}
 	}()
@@ -226,6 +292,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	log.Println("Shutting down...")
+	ptyMgr.Shutdown()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

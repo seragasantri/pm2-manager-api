@@ -12,11 +12,19 @@ import (
 // AppConfig holds all runtime configuration loaded from env vars.
 type AppConfig struct {
 	Port      string
+	BindAddr  string // BIND_ADDR, mis. 127.0.0.1 agar hanya bisa diakses lewat Nginx
 	NodeEnv   string
 	DB        DBConfig
 	JWT       JWTConfig
 	SuperAdmin SuperAdminConfig
 	PM2       PM2Config
+	WWW       WWWConfig
+}
+
+// WWWConfig untuk File Manager / Websites (aplikasi Nginx di /var/www).
+type WWWConfig struct {
+	Root     string // WWW_ROOT, default /var/www
+	NginxDir string // NGINX_SITES_DIR, default /etc/nginx/sites-enabled
 }
 
 type DBConfig struct {
@@ -63,7 +71,8 @@ func Load() *AppConfig {
 	}
 
 	return &AppConfig{
-		Port:    getEnv("PORT", "3003"),
+		Port:     getEnv("PORT", "3003"),
+		BindAddr: getEnv("BIND_ADDR", ""),
 		NodeEnv: getEnv("NODE_ENV", "development"),
 		DB: DBConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -83,6 +92,10 @@ func Load() *AppConfig {
 		PM2: PM2Config{
 			Home: getEnv("PM2_HOME", "/root/.pm2"),
 			Bin:  getEnv("PM2_BIN", "pm2"),
+		},
+		WWW: WWWConfig{
+			Root:     getEnv("WWW_ROOT", "/var/www"),
+			NginxDir: getEnv("NGINX_SITES_DIR", "/etc/nginx/sites-enabled"),
 		},
 	}
 }

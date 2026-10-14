@@ -16,14 +16,13 @@ RUN go build -ldflags="-s -w" -o /out/server  ./cmd/server
 RUN go build -ldflags="-s -w" -o /out/migrate ./cmd/migrate
 RUN go build -ldflags="-s -w" -o /out/seed    ./cmd/seed
 
-# Runtime stage — minimal: only the Go binaries + ca-certificates.
-# We use scratch-like alpine:no need for bash, docker-cli, or shell tools
-# because:
-#   - The Docker SDK (Go) talks to /var/run/docker.sock directly (no CLI).
-#   - PM2 CLI is invoked on the HOST (not inside this container) via exec.
-#   - Terminal exec for users runs on the HOST (chrooted to their app cwd).
+# Runtime: Alpine + Node/PM2 CLI so the API can talk to the host PM2 daemon
+# via mounted PM2_HOME (rpc.sock/pub.sock). Docker still uses the Go SDK + socket.
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates nodejs npm \
+  && npm install -g pm2@latest \
+  && pm2 -v
+
 WORKDIR /app
 
 COPY --from=builder /out/server  /app/server

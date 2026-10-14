@@ -27,8 +27,9 @@ func (s *TokenService) List(ctx context.Context) (any, error) {
 }
 
 type CreateTokenInput struct {
-	Label       string
-	AllowedApps []string
+	Label          string
+	AllowedApps    []string
+	AllowedActions []string
 }
 
 func (s *TokenService) Create(ctx context.Context, in CreateTokenInput, createdBy *int64) (any, error) {
@@ -39,7 +40,17 @@ func (s *TokenService) Create(ctx context.Context, in CreateTokenInput, createdB
 	if len(in.AllowedApps) == 0 {
 		return nil, ErrAppsRequired
 	}
-	return s.repo.Create(ctx, label, in.AllowedApps, createdBy)
+	tok, err := s.repo.Create(ctx, label, in.AllowedApps, createdBy)
+	if err != nil {
+		return nil, err
+	}
+	if len(in.AllowedActions) > 0 {
+		_ = s.repo.UpdateWithActions(ctx, tok.ID, label, in.AllowedApps, in.AllowedActions)
+		if updated, err := s.repo.FindByID(ctx, tok.ID); err == nil {
+			tok = updated
+		}
+	}
+	return tok, nil
 }
 
 func (s *TokenService) Update(ctx context.Context, id int64, in CreateTokenInput) (any, error) {
@@ -54,7 +65,15 @@ func (s *TokenService) Update(ctx context.Context, id int64, in CreateTokenInput
 	if len(in.AllowedApps) == 0 {
 		in.AllowedApps = existing.AllowedApps
 	}
-	if err := s.repo.Update(ctx, id, label, in.AllowedApps); err != nil {
+	actions := in.AllowedActions
+	if len(actions) == 0 && len(existing.AllowedActions) > 0 {
+		actions = existing.AllowedActions
+	}
+	if len(actions) > 0 || len(existing.AllowedActions) > 0 {
+		if err := s.repo.UpdateWithActions(ctx, id, label, in.AllowedApps, actions); err != nil {
+			return nil, err
+		}
+	} else if err := s.repo.Update(ctx, id, label, in.AllowedApps); err != nil {
 		return nil, err
 	}
 	return s.repo.FindByID(ctx, id)

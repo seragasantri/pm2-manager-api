@@ -92,6 +92,7 @@ func (h *FileHandler) Write(c echo.Context) error {
 	if err := h.svc.Write(c.Request().Context(), req.AppName, req.FilePath, req.Content); err != nil {
 		return response.ServerError(c, err.Error())
 	}
+	auditRecord(c, "files.write", "file", req.AppName+":"+req.FilePath, map[string]any{"app": req.AppName, "path": req.FilePath})
 	return response.OK(c, nil, "File berhasil disimpan")
 }
 
@@ -112,6 +113,7 @@ func (h *FileHandler) Delete(c echo.Context) error {
 	if err := h.svc.Delete(c.Request().Context(), req.AppName, req.FilePath); err != nil {
 		return response.ServerError(c, err.Error())
 	}
+	auditRecord(c, "files.delete", "file", req.AppName+":"+req.FilePath, map[string]any{"app": req.AppName, "path": req.FilePath})
 	return response.OK(c, nil, "Berhasil dihapus")
 }
 
@@ -133,4 +135,57 @@ func (h *FileHandler) CreateDir(c echo.Context) error {
 		return response.ServerError(c, err.Error())
 	}
 	return response.OK(c, nil, "Folder berhasil dibuat")
+}
+
+type renameRequest struct {
+	AppName string `json:"appName"`
+	OldPath string `json:"oldPath"`
+	NewPath string `json:"newPath"`
+}
+
+func (h *FileHandler) Rename(c echo.Context) error {
+	var req renameRequest
+	if err := c.Bind(&req); err != nil {
+		return response.ValidationError(c, "body tidak valid")
+	}
+	if req.AppName == "" || req.OldPath == "" || req.NewPath == "" {
+		return response.ValidationError(c, map[string]string{
+			"appName": "appName diperlukan",
+			"oldPath": "oldPath diperlukan",
+			"newPath": "newPath diperlukan",
+		})
+	}
+	if err := h.checkAccess(c, req.AppName); err != nil {
+		return err
+	}
+	if err := h.svc.Rename(c.Request().Context(), req.AppName, req.OldPath, req.NewPath); err != nil {
+		return response.ServerError(c, err.Error())
+	}
+	return response.OK(c, nil, "Berhasil diubah nama")
+}
+
+type uploadRequest struct {
+	AppName string `json:"appName"`
+	DirPath string `json:"dirPath"`
+}
+
+func (h *FileHandler) Upload(c echo.Context) error {
+	appName := c.FormValue("appName")
+	dirPath := c.FormValue("dirPath")
+	if appName == "" {
+		return response.ValidationError(c, map[string]string{"appName": "appName diperlukan"})
+	}
+	if err := h.checkAccess(c, appName); err != nil {
+		return err
+	}
+	file, header, err := c.Request().FormFile("file")
+	if err != nil {
+		return response.ValidationError(c, "file diperlukan di field 'file'")
+	}
+	defer file.Close()
+
+	if err := h.svc.Upload(c.Request().Context(), appName, dirPath, header.Filename, file); err != nil {
+		return response.ServerError(c, err.Error())
+	}
+	return response.OK(c, nil, "File berhasil diupload")
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/tragasolusi/pm2-manager-api/internal/auth"
 	"github.com/tragasolusi/pm2-manager-api/internal/docker"
@@ -72,13 +74,17 @@ func (s *AppService) GetApps(ctx context.Context, claims *auth.Claims) ([]AppVie
 		}
 	}
 
-	// 2. PM2 processes
+	// 2. PM2 processes (host daemon via PM2_HOME)
 	if s.pm2Cli != nil {
 		procs, err := s.pm2Cli.List(ctx)
 		if err != nil {
 			log.Printf("pm2 list error: %v", err)
 		} else {
+			log.Printf("pm2 list: %d process(es)", len(procs))
 			for _, p := range procs {
+				if p.IsModule() {
+					continue // skip pm2-logrotate etc.
+				}
 				if seen[p.Name] {
 					continue
 				}
@@ -92,9 +98,13 @@ func (s *AppService) GetApps(ctx context.Context, claims *auth.Claims) ([]AppVie
 					Type:   "pm2",
 					PmID:   p.PmID,
 				})
+				seen[p.Name] = true
 			}
 		}
 	}
+
+	// Enrich docker views with CPU/memory (best-effort, bulk, 2s budget)
+	s.enrichDockerStats(ctx, views)
 
 	// Sync to DB
 	if err := s.syncToDB(ctx, views); err != nil {
@@ -147,6 +157,9 @@ func (s *AppService) DoAction(ctx context.Context, name, action string, claims *
 	}
 	if claims != nil && claims.Role != "superadmin" && !contains(claims.AllowedApps, name) {
 		return ErrNoAccessToApp
+	}
+	if claims != nil && claims.Role != "superadmin" && !auth.HasAction(claims, "action") {
+		return errors.New("anda tidak memiliki izin restart/start/stop untuk aplikasi ini")
 	}
 
 	// Try Docker first
@@ -201,4 +214,35 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+func (s *AppService) enrichDockerStats(ctx context.Context, views []AppView) {
+	if s.dockerCli == nil {
+		return
+	}
+	budget, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i := range views {
+		if views[i].Type != "docker" || views[i].ContainerID == "" {
+			continue
+		}
+		if views[i].Status != "online" {
+			continue
+		}
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			if st, err := s.dockerCli.Stats(budget, views[idx].ContainerID); err == nil && st != nil {
+				views[idx].CPU = st.CPU
+				views[idx].Memory = float64(st.Memory)
+			}
+		}(i)
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-budget.Done():
+	}
 }

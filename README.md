@@ -75,6 +75,65 @@ go run ./cmd/server
 ### Terminal (WebSocket)
 - `GET /api/terminal?appName=&token=<jwt>` — WebSocket upgrade
 
+## Modul Panel v5 (cPanel-style)
+
+Semua endpoint di bawah **khusus superadmin** (kecuali disebut lain).
+
+### Terminal Root (PTY interaktif, setara SSH)
+Shell login sungguhan milik user service (mis. `lpmobe`) di pseudo-terminal —
+`vim`, `htop`, `sudo`, tab-completion jalan. Output disimpan di ring buffer
+1 MiB per sesi berbasis offset byte, jadi reload halaman / koneksi putus tidak
+kehilangan layar. Environment shell **bersih** (tidak mewarisi `DB_PASSWORD`,
+`JWT_SECRET`, dsb dari service).
+
+- `GET    /api/pty` — daftar sesi
+- `POST   /api/pty` — buka sesi `{cols, rows, cwd}`
+- `DELETE /api/pty/:id` — tutup sesi (SIGHUP ke process group, lalu SIGKILL)
+- `POST   /api/pty/:id/input` — `{data}` ketikan
+- `POST   /api/pty/:id/resize` — `{cols, rows}`
+- `GET    /api/pty/:id/stream?offset=N` — output via SSE (lolos Cloudflare)
+- `POST   /api/pty/:id/ticket` → `GET /api/pty/:id/ws?ticket=…&offset=N` — WebSocket (jalur cepat)
+
+Sesi tanpa penonton dimatikan setelah 30 menit; maksimal 12 sesi hidup. Sesi
+hilang bila service di-restart.
+
+### Websites & File Manager (`WWW_ROOT`, default `/var/www`)
+Semua path relatif terhadap root (`/simobe-lpm/app`). Path di-resolve termasuk
+symlink — apa pun yang mengarah ke luar root ditolak (zip-slip juga dicegah).
+
+- `GET  /api/www/sites` — deteksi aplikasi (Laravel, CI3/CI4, WordPress, PHP native, Node, statis…) + domain, SSL & PHP-FPM dari `NGINX_SITES_DIR`
+- `GET  /api/www/list?path=` · `GET /api/www/stat?path=` · `GET /api/www/read?path=`
+- `POST /api/www/write` `{path, content, mtime}` — `mtime` (epoch ms) mencegah menimpa perubahan orang lain (409)
+- `POST /api/www/create|rename|delete|chmod|copy|move|compress|extract`
+- `POST /api/www/upload` — multipart bertahap: `path, uploadId, offset, final, overwrite, chunk`
+- `GET  /api/www/search?path=&q=` · `GET /api/www/du?path=`
+- `POST /api/www/ticket {path, inline}` → `GET /api/www/download?ticket=…` (tiket 2 menit; folder diunduh sebagai zip)
+
+Operasi berat (salin, pindah, kompres, ekstrak) tetap jalan walau klien putus;
+bila > 80 detik dibalas `202` dan selesai di latar belakang.
+
+### Docker & PM2 & Sistem
+- `GET  /api/docker/overview` — container (+CPU/memori), image, info engine
+- `GET  /api/docker/containers/:id/logs?tail=&timestamps=1` · `GET …/inspect`
+- `POST /api/docker/containers/:id/action` — `start|stop|restart|pause|unpause|kill`
+- `GET  /api/pm2/processes` · `GET /api/pm2/processes/:name/logs?lines=`
+- `POST /api/pm2/processes/:name/action` — `start|stop|restart|reload|flush|reset`
+- `POST /api/pm2/save`
+- `GET  /api/system/overview` — host, layanan systemd, versi software, jaringan, disk
+
+### Env baru
+| Var | Default | Keterangan |
+|---|---|---|
+| `BIND_ADDR` | *(kosong = semua interface)* | set `127.0.0.1` agar API hanya lewat Nginx |
+| `WWW_ROOT` | `/var/www` | root File Manager & Websites |
+| `NGINX_SITES_DIR` | `/etc/nginx/sites-enabled` | sumber domain/SSL/PHP-FPM |
+| `PM2_HOME` | `/root/.pm2` | **harus** home PM2 milik user service, mis. `/home/lpmobe/.pm2` |
+
+### Test
+```bash
+go test ./internal/...
+```
+
 ## Deploy
 
 Lihat `DEPLOY.md`. Backend ini di-deploy **di host yang sama** dengan PM2 &

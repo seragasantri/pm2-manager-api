@@ -1,6 +1,11 @@
 package httpx
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+
 	"github.com/labstack/echo/v4"
 
 	"github.com/tragasolusi/pm2-manager-api/internal/service"
@@ -61,16 +66,28 @@ func (h *GitHandler) Branches(c echo.Context) error {
 	return response.OK(c, branches)
 }
 
-// pullRequest is the body for POST /api/git/pull.
+// Diff GET /api/git/diff?appName=X
+func (h *GitHandler) Diff(c echo.Context) error {
+	appName := c.QueryParam("appName")
+	if appName == "" {
+		return response.ValidationError(c, map[string]string{"appName": "appName diperlukan"})
+	}
+	if err := h.checkAccess(c, appName); err != nil {
+		return err
+	}
+	d, err := h.svc.Diff(c.Request().Context(), appName, ClaimsFrom(c))
+	if err != nil {
+		return response.ServerError(c, err.Error())
+	}
+	return response.OK(c, d)
+}
+
 type pullRequest struct {
 	AppName string `json:"appName"`
 	Branch  string `json:"branch"`
 }
 
-// Pull POST /api/git/pull
-// Streams git output via Server-Sent Events (text/event-stream) so the FE
-// can render the log as it runs, then a final `result` event with the
-// PullResult JSON.
+// Pull POST /api/git/pull — streams SSE log + final result.
 func (h *GitHandler) Pull(c echo.Context) error {
 	var req pullRequest
 	if err := c.Bind(&req); err != nil {
@@ -86,54 +103,44 @@ func (h *GitHandler) Pull(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderContentType, "text/event-stream")
 	c.Response().Header().Set("Cache-Control", "no-cache")
 	c.Response().Header().Set("Connection", "keep-alive")
-	c.Response().WriteHeader(200)
-	flusher, _ := c.Response().Writer.(interface {
-		Flush() error
-	})
+	c.Response().Header().Set("X-Accel-Buffering", "no")
+	c.Response().WriteHeader(http.StatusOK)
+
+	flusher, ok := c.Response().Writer.(http.Flusher)
 
 	writeEvent := func(event, data string) {
-		_, _ = c.Response().Write([]byte("event: " + event + "\n"))
-		_, _ = c.Response().Write([]byte("data: " + data + "\n\n"))
-		if flusher != nil {
-			_ = flusher.Flush()
+		// SSE data lines cannot contain raw newlines unescaped — split
+		data = strings.ReplaceAll(data, "\r\n", "\n")
+		_, _ = fmt.Fprintf(c.Response(), "event: %s\n", event)
+		for _, line := range strings.Split(data, "\n") {
+			_, _ = fmt.Fprintf(c.Response(), "data: %s\n", line)
+		}
+		_, _ = fmt.Fprintf(c.Response(), "\n")
+		if ok {
+			flusher.Flush()
 		}
 	}
 
-	// Use a buffered writer that prepends each chunk as a `log` event.
 	sw := &sseWriter{emit: writeEvent}
+	writeEvent("log", fmt.Sprintf("Starting git pull + deploy for %s...\n", req.AppName))
 
 	result, err := h.svc.Pull(c.Request().Context(), req.AppName, req.Branch, ClaimsFrom(c), sw)
 	if err != nil {
 		writeEvent("error", err.Error())
+		writeEvent("done", `{"success":false}`)
 		return nil
 	}
-	writeEvent("result", mustJSON(result))
-	writeEvent("done", "")
+	b, _ := json.Marshal(result)
+	writeEvent("result", string(b))
+	writeEvent("done", `{"success":true}`)
 	return nil
 }
 
-// sseWriter wraps the SSE emitter as an io.Writer so git's stdout/stderr are
-// streamed line-by-line.
 type sseWriter struct {
 	emit func(event, data string)
 }
 
 func (w *sseWriter) Write(p []byte) (int, error) {
-	// Emit as a single log chunk; FE can split on \n if needed.
 	w.emit("log", string(p))
 	return len(p), nil
-}
-
-func mustJSON(v any) string {
-	// Tiny helper to avoid pulling encoding/json for a single call.
-	b, err := jsonMarshal(v)
-	if err != nil {
-		return `{"error":"json marshal"}`
-	}
-	return string(b)
-}
-
-func jsonMarshal(v any) ([]byte, error) {
-	// Wrapped to keep imports tidy in this file.
-	return jsonMarshalImpl(v)
 }

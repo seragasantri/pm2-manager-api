@@ -7,14 +7,15 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Claims is the JWT body for our app. AllowedApps is only present for token-based users.
+// Claims is the JWT body for our app. AllowedApps/AllowedActions only present for token-based users.
 type Claims struct {
-	Role        string   `json:"role"`
-	Type        string   `json:"type"` // "admin" or "token"
-	UserID      int64    `json:"userId,omitempty"`
-	TokenID     int64    `json:"token_id,omitempty"`
-	Label       string   `json:"label,omitempty"`
-	AllowedApps []string `json:"allowedApps,omitempty"`
+	Role           string   `json:"role"`
+	Type           string   `json:"type"` // "admin" or "token"
+	UserID         int64    `json:"userId,omitempty"`
+	TokenID        int64    `json:"token_id,omitempty"`
+	Label          string   `json:"label,omitempty"`
+	AllowedApps    []string `json:"allowedApps,omitempty"`
+	AllowedActions []string `json:"allowedActions,omitempty"` // empty = all
 	jwt.RegisteredClaims
 }
 
@@ -61,6 +62,22 @@ func (s *Service) IssueTokenUser(tokenID int64, label string, allowedApps []stri
 	return s.sign(claims)
 }
 
+func (s *Service) IssueTokenUserWithActions(tokenID int64, label string, allowedApps, allowedActions []string, ttl time.Duration) (string, error) {
+	claims := Claims{
+		Role:           "user",
+		Type:           "token",
+		TokenID:        tokenID,
+		Label:          label,
+		AllowedApps:    allowedApps,
+		AllowedActions: allowedActions,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+	return s.sign(claims)
+}
+
 func (s *Service) sign(claims Claims) (string, error) {
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return t.SignedString(s.secret)
@@ -82,6 +99,57 @@ func (s *Service) Verify(tokenStr string) (*Claims, error) {
 		return nil, ErrInvalidToken
 	}
 	if !tok.Valid {
+		return nil, ErrInvalidToken
+	}
+	// Tiket download/preview ditandatangani dengan secret yang sama; jangan
+	// sampai bisa dipakai sebagai token sesi.
+	if c.Type != "admin" && c.Type != "token" {
+		return nil, ErrInvalidToken
+	}
+	return c, nil
+}
+
+// TicketClaims adalah token sekali-pakai berumur pendek untuk URL yang dibuka
+// langsung oleh browser (download / preview) — tidak bisa membawa header
+// Authorization, jadi JWT sesi utama tidak perlu ditaruh di URL.
+type TicketClaims struct {
+	Purpose string `json:"pur"`
+	Subject string `json:"sub_path"`
+	Inline  bool   `json:"inl,omitempty"`
+	jwt.RegisteredClaims
+}
+
+// IssueTicket membuat tiket untuk satu tujuan + satu path.
+func (s *Service) IssueTicket(purpose, subject string, inline bool, ttl time.Duration) (string, error) {
+	claims := TicketClaims{
+		Purpose: purpose,
+		Subject: subject,
+		Inline:  inline,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return t.SignedString(s.secret)
+}
+
+// VerifyTicket memvalidasi tiket untuk tujuan tertentu.
+func (s *Service) VerifyTicket(tokenStr, purpose string) (*TicketClaims, error) {
+	c := &TicketClaims{}
+	tok, err := jwt.ParseWithClaims(tokenStr, c, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, ErrInvalidToken
+		}
+		return s.secret, nil
+	})
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return nil, ErrExpired
+		}
+		return nil, ErrInvalidToken
+	}
+	if !tok.Valid || c.Purpose != purpose || c.Subject == "" {
 		return nil, ErrInvalidToken
 	}
 	return c, nil

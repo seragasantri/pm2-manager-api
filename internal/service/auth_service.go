@@ -35,16 +35,23 @@ func NewAuthService(
 }
 
 type LoginResult struct {
-	Token       string   `json:"token"`
-	Role        string   `json:"role"`
-	Label       string   `json:"label,omitempty"`
-	AllowedApps []string `json:"allowedApps,omitempty"`
+	Token          string   `json:"token"`
+	Role           string   `json:"role"`
+	Label          string   `json:"label,omitempty"`
+	AllowedApps    []string `json:"allowedApps,omitempty"`
+	AllowedActions []string `json:"allowedActions,omitempty"`
 }
 
 func (s *AuthService) LoginAdmin(ctx context.Context, username, password string) (*LoginResult, error) {
 	u, err := s.users.FindByUsername(ctx, username)
 	if err != nil {
-		return nil, ErrInvalidCredentials
+		// Hanya "user tidak ada" yang boleh jadi 401. Error lain (mis. MySQL mati
+		// atau kredensial DB salah) harus dipropagasi supaya handler membalas 500
+		// dan masalah infrastruktur tidak tersamar sebagai "password salah".
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, err
 	}
 	if u.Role != "superadmin" {
 		return nil, ErrAccessDenied
@@ -62,16 +69,25 @@ func (s *AuthService) LoginAdmin(ctx context.Context, username, password string)
 func (s *AuthService) LoginWithToken(ctx context.Context, accessCode string) (*LoginResult, error) {
 	t, err := s.tokens.FindByCode(ctx, accessCode)
 	if err != nil {
-		return nil, ErrInvalidAccessCode
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrInvalidAccessCode
+		}
+		return nil, err
 	}
-	tok, err := s.jwt.IssueTokenUser(t.ID, t.Label, t.AllowedApps, 12*time.Hour)
+	var tok string
+	if len(t.AllowedActions) > 0 {
+		tok, err = s.jwt.IssueTokenUserWithActions(t.ID, t.Label, t.AllowedApps, t.AllowedActions, 12*time.Hour)
+	} else {
+		tok, err = s.jwt.IssueTokenUser(t.ID, t.Label, t.AllowedApps, 12*time.Hour)
+	}
 	if err != nil {
 		return nil, err
 	}
 	return &LoginResult{
-		Token:       tok,
-		Role:        "user",
-		Label:       t.Label,
-		AllowedApps: t.AllowedApps,
+		Token:          tok,
+		Role:           "user",
+		Label:          t.Label,
+		AllowedApps:    t.AllowedApps,
+		AllowedActions: t.AllowedActions,
 	}, nil
 }

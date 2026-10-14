@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -274,4 +275,63 @@ func randomToken() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// Rename moves/renames a file or directory.
+func (s *FileService) Rename(ctx context.Context, name, oldRelPath, newRelPath string) error {
+	app, err := s.resolveApp(ctx, name)
+	if err != nil {
+		return err
+	}
+	oldTarget, err := safeJoin(app.cwd, oldRelPath)
+	if err != nil {
+		return err
+	}
+	newTarget, err := safeJoin(app.cwd, newRelPath)
+	if err != nil {
+		return err
+	}
+	if app.kind == "docker" {
+		_, err := s.dockerCli.Exec(ctx, app.containerID, fmt.Sprintf(`mv %q %q`, oldTarget, newTarget))
+		return err
+	}
+	return os.Rename(oldTarget, newTarget)
+}
+
+// Upload saves an uploaded file to the app's dirPath.
+func (s *FileService) Upload(ctx context.Context, name, dirPath, filename string, src io.Reader) error {
+	app, err := s.resolveApp(ctx, name)
+	if err != nil {
+		return err
+	}
+	target, err := safeJoin(app.cwd, filepath.Join(dirPath, filename))
+	if err != nil {
+		return err
+	}
+	if app.kind == "docker" {
+		// Write via cat into container
+		b, err := io.ReadAll(src)
+		if err != nil {
+			return err
+		}
+		delim := "PM2MGR_EOF_" + randomToken()
+		cmd := fmt.Sprintf(
+			`mkdir -p $(dirname %q) && cat > %q <<'%s'
+%s
+%s`,
+			target, target, delim, string(b), delim,
+		)
+		_, err = s.dockerCli.Exec(ctx, app.containerID, cmd)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	dst, err := os.Create(target)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	_, err = io.Copy(dst, src)
+	return err
 }

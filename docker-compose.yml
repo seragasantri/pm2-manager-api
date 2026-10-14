@@ -1,5 +1,7 @@
 services:
   backend_panel:
+    # Image committed with nodejs + pm2 + PATH-safe pm2 wrapper
+    image: backend-backend_panel:withpm2
     build: .
     container_name: panel_backend_container
     # Host networking so the API can reach MySQL/PM2 daemon/Docker socket on the VPS.
@@ -8,15 +10,18 @@ services:
     env_file:
       - .env
     environment:
-      - PM2_HOME=/root/.pm2
-    # Map "host.docker.internal" to the Docker host gateway (works on Linux too).
-    # If your MySQL is on the same host, you can also use DB_HOST=172.17.0.1
-    # (the default bridge gateway) and skip this.
+      # Host PM2 runs as user lpmobe — must match mounted PM2_HOME
+      - PM2_HOME=/home/lpmobe/.pm2
+      - PM2_BIN=/usr/local/bin/pm2
+      - PATH=/usr/local/bin:/usr/bin:/bin
+      - HOME=/root
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # Mount Docker socket + PM2 daemon dir from host.
+      # Docker: list/start/stop containers
       - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.pm2:/root/.pm2
-      # Optionally mount a host path so file manager + terminal can see real apps.
-      # - /home/apps:/srv/apps:ro
+      # PM2 host daemon (user lpmobe) — sockets + dump/logs
+      - /home/lpmobe/.pm2:/home/lpmobe/.pm2
+      # Host app sources for file manager / terminal
+      - /var/www:/var/www
+      - /home/lpmobe:/home/lpmobe
